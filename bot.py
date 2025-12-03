@@ -1,7 +1,7 @@
 import base64
 from urllib.parse import quote
 import httpx
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from docxtpl import DocxTemplate
 
@@ -13,14 +13,14 @@ CF_MODEL = "@cf/meta/llama-3.1-8b-instruct"
 
 CF_URL = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/{CF_MODEL}"
 
-# === PUBLIC URL для WebApp ===
-WEBAPP_BASE_URL = "https://eduplan011-cgldrni99-ainaras-projects-bc848d65.vercel.app/editor.html"
+# === URL для Flask редактора ===
+# если локально: http://127.0.0.1:5000/edit
+# если на сервере/хостинге — публичный адрес
+FLASK_BASE_URL = "http://127.0.0.1:5000/edit"
 
-
-
-
-# Для хранения данных пользователя
+# Для хранения данных пользователя в боте
 user_data = {}
+plans = {}  # для Flask
 
 # ----------------------
 # START COMMAND
@@ -32,7 +32,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # TEXT HANDLER
 # ----------------------
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
+    user_id = str(update.message.from_user.id)
     text = update.message.text
 
     if user_id not in user_data:
@@ -90,36 +90,12 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # сохраняем план
         user_data[user_id]["plan"] = plan
+        plans[user_id] = plan  # для Flask
 
-        # base64 + urlquote для WebApp
-        encoded = base64.urlsafe_b64encode(plan.encode("utf-8")).decode("ascii")
-        encoded_quoted = quote(encoded, safe='')
-
-        if WEBAPP_BASE_URL == "https://YOUR_DEPLOYED_WEBAPP_URL/edit":
-            # если не настроен WEBAPP_BASE_URL
-            await update.message.reply_text(
-                "⚠️ WEBAPP_BASE_URL не настроен. Открой bot.py и установи WEBAPP_BASE_URL на URL, "
-                "куда ты задеплоил editor.html (обязательно HTTPS)."
-            )
-            # сразу отправляем docx
-            doc = DocxTemplate("template.docx")
-            context_data = {
-                "topic": user_data[user_id]["topic"],
-                "class": user_data[user_id]["class"],
-                "date": user_data[user_id]["date"],
-                "teacher": user_data[user_id]["teacher"],
-                "plan": plan
-            }
-            doc.render(context_data)
-            filename = f"plan_{user_id}.docx"
-            doc.save(filename)
-            await update.message.reply_document(open(filename, "rb"))
-            del user_data[user_id]
-            return
-
-        webapp_url = f"{WEBAPP_BASE_URL}?plan={encoded_quoted}"
+        # генерируем кнопку для редактирования
+        edit_url = f"{FLASK_BASE_URL}/{user_id}"
         keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("Открыть редактор плана", web_app=WebAppInfo(url=webapp_url))
+            InlineKeyboardButton("Открыть редактор плана", url=edit_url)
         ]])
 
         await update.message.reply_text(
@@ -129,45 +105,12 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 # ----------------------
-# WEBAPP DATA HANDLER
-# ----------------------
-async def webapp_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    raw = update.message.web_app_data.data
-    user_id = update.message.from_user.id
-    plan_text = raw
-    try:
-        import json
-        parsed = json.loads(raw)
-        if isinstance(parsed, dict) and "text" in parsed:
-            plan_text = parsed["text"]
-    except Exception:
-        pass
-
-    doc = DocxTemplate("template.docx")
-    ud = user_data.get(user_id, {})
-    context_data = {
-        "topic": ud.get("topic", ""),
-        "class": ud.get("class", ""),
-        "date": ud.get("date", ""),
-        "teacher": ud.get("teacher", ""),
-        "plan": plan_text
-    }
-    doc.render(context_data)
-    filename = f"plan_{user_id}.docx"
-    doc.save(filename)
-    await update.message.reply_document(open(filename, "rb"))
-
-    if user_id in user_data:
-        del user_data[user_id]
-
-# ----------------------
 # RUN BOT
 # ----------------------
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.StatusUpdate.WEB_APP_DATA, text_handler))
-    app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, webapp_handler))
+    app.add_handler(MessageHandler(filters.TEXT, text_handler))
     print("Bot started. Press Ctrl+C to stop.")
     app.run_polling()
 
