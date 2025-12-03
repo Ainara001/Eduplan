@@ -14,7 +14,9 @@ CF_MODEL = "@cf/meta/llama-3.1-8b-instruct"
 CF_URL = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/{CF_MODEL}"
 
 # === PUBLIC URL для WebApp ===
-WEBAPP_BASE_URL = "https://my-eduplan-editor.vercel.app/editor.html"  # <-- Заменить на свой HTTPS URL
+WEBAPP_BASE_URL = "https://eduplan011-cgldrni99-ainaras-projects-bc848d65.vercel.app/editor.html"
+
+
 
 
 # Для хранения данных пользователя
