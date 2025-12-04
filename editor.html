@@ -1,14 +1,32 @@
 <!DOCTYPE html>
-<html>
+<html lang="ru">
 <head>
-    <meta charset="UTF-8">
-    <title>Редактор плана</title>
+  <meta charset="UTF-8">
+  <title>Редактор плана урока</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
-    <h1>Редактировать план</h1>
-    <form method="post">
-        <textarea name="plan" rows="20" cols="80">{{ plan }}</textarea><br>
-        <button type="submit">Сохранить и создать DOCX</button>
-    </form>
+  <h2>Редактор плана урока</h2>
+  <textarea id="plan" style="width:100%; height:300px"></textarea>
+  <br><br>
+  <button onclick="sendPlan()">Скачать DOCX</button>
+
+  <script>
+    const tg = window.Telegram.WebApp;
+
+    // Получаем текст плана из URL
+    const params = new URLSearchParams(window.location.search);
+    const encoded = params.get('plan');
+    if(encoded){
+      const decoded = atob(decodeURIComponent(encoded));
+      document.getElementById('plan').value = decoded;
+    }
+
+    function sendPlan() {
+      const text = document.getElementById('plan').value;
+      tg.sendData(JSON.stringify({text}));
+      tg.close();
+    }
+  </script>
 </body>
 </html>

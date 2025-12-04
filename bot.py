@@ -1,26 +1,18 @@
 import base64
-from urllib.parse import quote
-import httpx
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+import json
+from urllib.parse import quote, unquote
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from docxtpl import DocxTemplate
 
 # === ТВОИ ДАННЫЕ ===
-TOKEN = "8374010587:AAGuPA9SAOfh5YaCcmlopdszPAY6GTJWVrs"  # Telegram bot token
-CF_API_TOKEN = "FtLRekpE8XxoSU7f7joPV8P1yw_eJiWPcakr48qQ"  # Cloudflare API Token
-CF_ACCOUNT_ID = "40e01c9819d73953f76d02dbc3fd6ae5"  # Cloudflare Account ID
-CF_MODEL = "@cf/meta/llama-3.1-8b-instruct"
+TOKEN = "8374010587:AAGuPA9SAOfh5YaCcmlopdszPAY6GTJWVrs"
 
-CF_URL = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/{CF_MODEL}"
+# URL твоего Web App (должен быть HTTPS, например Vercel)
+WEBAPP_BASE_URL = "https://твоя_вёрсел_ссылка/editor.html"
 
-# === URL для Flask редактора ===
-# если локально: http://127.0.0.1:5000/edit
-# если на сервере/хостинге — публичный адрес
-FLASK_BASE_URL = "http://127.0.0.1:5000/edit"
-
-# Для хранения данных пользователя в боте
+# Храним данные пользователей
 user_data = {}
-plans = {}  # для Flask
 
 # ----------------------
 # START COMMAND
@@ -39,70 +31,69 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_data[user_id] = {"topic": text}
         await update.message.reply_text("Введите класс/группу:")
         return
-
     if "class" not in user_data[user_id]:
         user_data[user_id]["class"] = text
         await update.message.reply_text("Введите дату урока:")
         return
-
     if "date" not in user_data[user_id]:
         user_data[user_id]["date"] = text
         await update.message.reply_text("Введите ФИО преподавателя:")
         return
-
     if "teacher" not in user_data[user_id]:
         user_data[user_id]["teacher"] = text
-        await update.message.reply_text("Генерирую поурочный план...")
 
-        # ------ PROMPT ------
-        prompt = f"""
-Сгенерируй поурочный план.
-Тема: {user_data[user_id]["topic"]}
-Класс: {user_data[user_id]["class"]}
-Дата: {user_data[user_id]["date"]}
-Учитель: {user_data[user_id]["teacher"]}
+        # Сохраняем план (пока просто текст для редактора)
+        plan_text = f"Тема: {user_data[user_id]['topic']}\nКласс: {user_data[user_id]['class']}\nДата: {user_data[user_id]['date']}\nУчитель: {user_data[user_id]['teacher']}\n\nВведите здесь текст плана урока..."
+        user_data[user_id]["plan"] = plan_text
 
-Нужные блоки:
-1. Цели урока
-2. Оборудование и материалы
-3. Ход урока (этапы, время)
-4. Формы оценивания
-5. Домашнее задание
-"""
+        # Кодируем текст для передачи в Web App
+        encoded = quote(base64.b64encode(plan_text.encode("utf-8")))
 
-        # ----------------------
-        # Cloudflare AI REQUEST через httpx
-        # ----------------------
-        headers = {
-            "Authorization": f"Bearer {CF_API_TOKEN}",
-            "Content-Type": "application/json"
-        }
-        payload = {"prompt": prompt, "max_tokens": 900}
+        webapp_url = f"{WEBAPP_BASE_URL}?plan={encoded}"
 
-        try:
-            with httpx.Client(timeout=30) as client:
-                response = client.post(CF_URL, headers=headers, json=payload)
-                response.raise_for_status()
-                data = response.json()
-                plan = data.get("result", {}).get("response", "")
-        except Exception as e:
-            plan = f"(Ошибка при запросе к Cloudflare: {e})"
-
-        # сохраняем план
-        user_data[user_id]["plan"] = plan
-        plans[user_id] = plan  # для Flask
-
-        # генерируем кнопку для редактирования
-        edit_url = f"{FLASK_BASE_URL}/{user_id}"
         keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("Открыть редактор плана", url=edit_url)
+            InlineKeyboardButton("Открыть редактор плана", web_app=WebAppInfo(url=webapp_url))
         ]])
 
         await update.message.reply_text(
-            "План сгенерирован. Нажмите кнопку, чтобы открыть редактор и при необходимости изменить текст. "
-            "После редактирования нажмите 'Скачать' — бот пришлёт DOCX.",
+            "Нажмите кнопку, чтобы открыть редактор прямо в Telegram.",
             reply_markup=keyboard
         )
+
+# ----------------------
+# WEBAPP DATA HANDLER
+# ----------------------
+async def webapp_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.message.from_user.id)
+    raw = update.message.web_app_data.data
+
+    try:
+        data = json.loads(raw)
+        plan_text = data.get("text", "")
+    except Exception:
+        plan_text = raw
+
+    # Сохраняем план
+    user_data[user_id]["plan"] = plan_text
+
+    # Создаём DOCX
+    doc = DocxTemplate("template.docx")
+    context_data = {
+        "topic": user_data[user_id]["topic"],
+        "class": user_data[user_id]["class"],
+        "date": user_data[user_id]["date"],
+        "teacher": user_data[user_id]["teacher"],
+        "plan": plan_text
+    }
+    doc.render(context_data)
+    filename = f"plan_{user_id}.docx"
+    doc.save(filename)
+
+    # Отправляем пользователю
+    await update.message.reply_document(open(filename, "rb"))
+
+    # Удаляем данные
+    del user_data[user_id]
 
 # ----------------------
 # RUN BOT
@@ -110,7 +101,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT, text_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.StatusUpdate.WEB_APP_DATA, text_handler))
+    app.add_handler(MessageHandler(filters.StatusUpdate.WEB_APP_DATA, webapp_handler))
     print("Bot started. Press Ctrl+C to stop.")
     app.run_polling()
 
